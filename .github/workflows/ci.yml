@@ -1,0 +1,112 @@
+# Acme Finance AI SDLC — the pipeline stages, in the order GitHub shows them.
+#
+#   stage-1: tests       unit tests of every service + the reviewer's own tests
+#   stage-2: ai-review   Gemini reviews the PR diff, posts inline comments, fails on a blocker
+#   stage-3: merge-gate  the ONLY required check; passes when the stages this mode needs passed
+#
+# One codebase, two modes, chosen by the repo variable SDLC_MODE:
+#   enforced (default)  stage-2 runs here in CI on every push. A blocker blocks the merge.
+#   ide                 stage-2 is skipped in CI. The review runs from the developer's IDE
+#                       (review-pr skill), which posts the status "stage-2: ai-review (ide)"
+#                       on the commit it reviewed. Branch protection requires that status
+#                       and resolved conversations, so an unreviewed push cannot merge.
+#
+# Model access for stage-2, pick one:
+#   Vertex AI (recommended): repo variables GCP_WIF_PROVIDER, GCP_SERVICE_ACCOUNT,
+#     GOOGLE_CLOUD_PROJECT (keyless, Workload Identity Federation).
+#   Gemini API: repo secret GEMINI_API_KEY.
+# GitHub access is the built-in GITHUB_TOKEN; no bot token needed.
+
+name: ai-sdlc
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  stage-1-tests:
+    name: "stage-1: tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install --quiet -e ".[dev]"
+      - name: loan-service tests
+        run: python -m pytest -q
+        working-directory: services/loan-service
+      - name: reviewer tests
+        run: python -m pytest -q
+
+  stage-2-ai-review:
+    name: "stage-2: ai-review"
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft && vars.SDLC_MODE != 'ide'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write   # Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - if: vars.GCP_WIF_PROVIDER != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - run: pip install --quiet -e .
+      - name: Gemini review
+        run: antigravity-review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GOOGLE_GENAI_USE_VERTEXAI: ${{ vars.GCP_WIF_PROVIDER != '' }}
+          GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
+          GOOGLE_CLOUD_LOCATION: us-central1
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-pro
+          REVIEW_FAIL_ON: blocker
+          REVIEW_MIN_CONFIDENCE: "0.6"
+          REVIEW_EXCLUDE_GLOBS: "demo/**,**/*.lock,**/go.sum,**/composer.lock,**/packages.lock.json"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-findings
+          path: ai-review-findings.json
+          if-no-files-found: ignore
+
+  stage-3-merge-gate:
+    name: "stage-3: merge-gate"
+    if: always() && github.event_name == 'pull_request'
+    needs: [stage-1-tests, stage-2-ai-review]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide
+        env:
+          MODE: ${{ vars.SDLC_MODE || 'enforced' }}
+          TESTS: ${{ needs.stage-1-tests.result }}
+          REVIEW: ${{ needs.stage-2-ai-review.result }}
+        run: |
+          echo "mode=$MODE tests=$TESTS ai-review=$REVIEW"
+          {
+            echo "### Merge gate ($MODE mode)"
+            echo "| stage | result |"; echo "| --- | --- |"
+            echo "| stage-1: tests | $TESTS |"; echo "| stage-2: ai-review | $REVIEW |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$TESTS" = success ] || { echo "::error::tests did not pass"; exit 1; }
+          if [ "$MODE" = ide ]; then
+            echo "IDE mode: merge also needs the 'stage-2: ai-review (ide)' status on this commit and no open conversations."
+          else
+            [ "$REVIEW" = success ] || { echo "::error::AI review found a blocker (or did not run)"; exit 1; }
+          fi
