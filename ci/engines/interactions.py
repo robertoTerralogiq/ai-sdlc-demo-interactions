@@ -81,7 +81,9 @@ def _readback(client, env_id: str, dirs: list[str]) -> dict[str, str]:
                 if str(f.type).lower() != "file":  # API returns "FILE"/"DIRECTORY"
                     continue
                 rel = path.removeprefix(ROOT.lstrip("/") + "/")
-                if SKIP_DIRS & set(PurePosixPath(rel).parts) or rel.endswith(".pyc"):
+                # pytest leaves `pytest-cache-files-*` temp files behind when its cache dir is unwritable.
+                if (SKIP_DIRS & set(PurePosixPath(rel).parts) or rel.endswith(".pyc")
+                        or PurePosixPath(rel).name.startswith("pytest-cache-files-")):
                     continue
                 try:
                     out[rel] = client.environments.files.download(environment=env_id, path=path).decode()
