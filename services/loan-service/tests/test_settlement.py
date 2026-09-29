@@ -1,16 +1,12 @@
 import importlib
 import json
 import logging
-import os
 import sqlite3
 import urllib.error
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-# Ensure environment variable is set for module import
-os.environ.setdefault("CORE_API_KEY", "test-api-key")
 
 import loan.settlement
 from loan.repository import ContractRepository
