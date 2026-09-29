@@ -18,12 +18,16 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+# stage-3 fix engines; `interactions` needs nothing beyond google-genai.
+interactions = []
+sdk = ["google-antigravity>=0.1.20"]
+adk = ["google-adk>=2.10"]
 
 [project.scripts]
 antigravity-review = "antigravity_reviewer.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["antigravity_reviewer*"]
+include = ["antigravity_reviewer*", "ci*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

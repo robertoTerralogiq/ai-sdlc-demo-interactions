@@ -7,3 +7,4 @@ gl-code-quality-report.json
 ai-review-findings.json
 demo/out/
 demo/pipeline-run.log
+fix-result.json
