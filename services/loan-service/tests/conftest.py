@@ -1,3 +1,6 @@
-import os
+import pytest
 
-os.environ.setdefault("CORE_API_KEY", "test-api-key")
+
+@pytest.fixture(autouse=True)
+def core_api_key(monkeypatch):
+    monkeypatch.setenv("CORE_API_KEY", "test-api-key")

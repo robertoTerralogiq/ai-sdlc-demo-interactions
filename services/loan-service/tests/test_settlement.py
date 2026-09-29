@@ -1,6 +1,7 @@
 import importlib
 import json
 import logging
+import os
 import sqlite3
 import urllib.error
 from decimal import Decimal
@@ -8,9 +9,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import loan.settlement
+import sys
+
 from loan.repository import ContractRepository
-from loan.settlement import PENALTY_RATE, send_quote, settlement_quote
+
+
+@pytest.fixture(autouse=True)
+def _import_settlement():
+    import loan.settlement
+    globals()["loan"] = sys.modules["loan"]
+    globals()["settlement_quote"] = loan.settlement.settlement_quote
+    globals()["PENALTY_RATE"] = loan.settlement.PENALTY_RATE
+    globals()["send_quote"] = loan.settlement.send_quote
 
 
 @pytest.fixture
@@ -114,3 +124,11 @@ def test_send_quote_raises_on_non_2xx_status():
 
         with pytest.raises(RuntimeError, match="status: 500"):
             send_quote("K-001", 9_180_000)
+
+
+def test_conftest_does_not_set_environment_default(monkeypatch):
+    import tests.conftest as conftest_mod
+
+    monkeypatch.delenv("CORE_API_KEY", raising=False)
+    importlib.reload(conftest_mod)
+    assert "CORE_API_KEY" not in os.environ
